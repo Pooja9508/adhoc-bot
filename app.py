@@ -1207,31 +1207,54 @@ def render_single_result(result, request, request_type, df_input, name="", idx=0
                     metric_cols[i].metric(label, formatted)
                 st.divider()
 
+            # ── Chart ─────────────────────────────────────────────────────────
             if user_wants_visual(request):
                 st.subheader("Visual")
                 render_chart(df_display, request, "Results Chart")
                 st.divider()
 
-            st.subheader(f"Supporting Records ({result['rows']:,})")
+            # ── Prepare formatted table ────────────────────────────────────────
             is_ranked = any(w in request.lower() for w in ["top", "bottom", "best", "worst", "highest", "lowest", "ranking"])
             df_formatted = format_display_df(df_display.copy())
             already_has_rank = any(c.lower() in ("rank", "rnk") for c in df_display.columns)
-            grouped_rendered = render_grouped_table(df_display)
-            if not grouped_rendered:
-                if is_ranked and len(df_formatted) <= 50 and not already_has_rank and "Rank" not in df_formatted.columns:
-                    df_formatted.insert(0, "Rank", range(1, len(df_formatted) + 1))
-                st.dataframe(df_formatted, use_container_width=True, hide_index=True)
+            if is_ranked and len(df_formatted) <= 50 and not already_has_rank and "Rank" not in df_formatted.columns:
+                df_formatted.insert(0, "Rank", range(1, len(df_formatted) + 1))
+
+            # ── Decide whether supporting records duplicate the summary ─────────
+            # Summary already shows the ranked breakdown when result is small (≤20 rows).
+            # In that case, collapse supporting records into an expander.
+            summary_already_shows_data = len(df_display) <= 20
 
             buf = io.BytesIO()
             df_formatted.to_excel(buf, index=False)
-            st.download_button(
-                "Download Excel File", buf.getvalue(),
-                file_name="results.xlsx",
-                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                key=f"dl_excel_{idx}",
-            )
-            st.divider()
 
+            if summary_already_shows_data:
+                # Put supporting records inside expander — same data as summary table
+                with st.expander(f"📋 Supporting Records ({result['rows']:,})"):
+                    grouped_rendered = render_grouped_table(df_display)
+                    if not grouped_rendered:
+                        st.dataframe(df_formatted, use_container_width=True, hide_index=True)
+                    st.download_button(
+                        "Download Excel File", buf.getvalue(),
+                        file_name="results.xlsx",
+                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                        key=f"dl_excel_{idx}",
+                    )
+            else:
+                # Large result — show records prominently
+                st.subheader(f"Supporting Records ({result['rows']:,})")
+                grouped_rendered = render_grouped_table(df_display)
+                if not grouped_rendered:
+                    st.dataframe(df_formatted, use_container_width=True, hide_index=True)
+                st.download_button(
+                    "Download Excel File", buf.getvalue(),
+                    file_name="results.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    key=f"dl_excel_{idx}",
+                )
+                st.divider()
+
+            # ── Expanders: Chart + SQL ─────────────────────────────────────────
             if not user_wants_visual(request):
                 with st.expander("📊 Supporting Chart"):
                     render_chart(df_display, request, "Results Chart")
