@@ -312,8 +312,10 @@ def detect_chart_type(user_request: str, df: pd.DataFrame) -> str:
     req = user_request.lower()
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     text_cols    = df.select_dtypes(include="object").columns.tolist()
-    num_categories = df[text_cols[0]].nunique() if text_cols else 0
     num_rows = len(df)
+    if num_rows == 0 or not numeric_cols:
+        return "bar"
+    num_categories = df[text_cols[0]].nunique() if text_cols else 0
 
     # ── 1. Explicit chart type requested ─────────────────────────────────────
     explicit = {
@@ -333,8 +335,8 @@ def detect_chart_type(user_request: str, df: pd.DataFrame) -> str:
         return "line"
 
     # Check if the x-axis column looks like a date/period string
-    if text_cols:
-        sample = str(df[text_cols[0]].iloc[0]) if num_rows > 0 else ""
+    if text_cols and num_rows > 0:
+        sample = str(df[text_cols[0]].dropna().iloc[0]) if len(df[text_cols[0]].dropna()) > 0 else ""
         x_col_lower = text_cols[0].lower()
         is_time_col = (
             bool(re.search(r'\d{4}[-/]\d{2}', sample))          # "2023-01" or "2023/01"
@@ -409,7 +411,7 @@ def _build_fig(df, chart_type, x, y, title):
             fig.update_layout(showlegend=False)
     elif chart_type == "scatter":
         numeric_cols = df.select_dtypes(include="number").columns.tolist()
-        y2 = numeric_cols[1] if len(numeric_cols) >= 2 else y
+        y2 = numeric_cols[1] if len(numeric_cols) >= 2 else numeric_cols[0] if numeric_cols else y
         fig = px.scatter(df, x=y, y=y2, color=x, title=title, size_max=15,
                          color_discrete_sequence=px.colors.qualitative.Set2)
     elif chart_type == "histogram":
@@ -444,19 +446,23 @@ def _build_fig(df, chart_type, x, y, title):
 def render_chart(df: pd.DataFrame, user_request: str, title: str = "Chart"):
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     text_cols = df.select_dtypes(include="object").columns.tolist()
+    if len(df) == 0 or not numeric_cols:
+        st.caption("Not enough data to render a chart.")
+        return
     chart_check = validate_chart_dimensions(df)
     if not chart_check["valid"]:
         st.caption(chart_check.get("warning", "Not enough data to render a chart."))
         return
-    if len(df) < 2 or not numeric_cols:
+    if len(df) < 2:
         st.caption("Not enough data to render a chart.")
         return
     if len(df) > 50:
         df = df.head(50)
     chart_type = detect_chart_type(user_request, df)
-    x = text_cols[0] if text_cols else None
+    # For all-numeric results use the first numeric col as x-axis
+    x = text_cols[0] if text_cols else (numeric_cols[0] if len(numeric_cols) > 1 else None)
     y = numeric_cols[0] if numeric_cols else None
-    if not x or not y:
+    if not x or not y or x == y:
         st.caption("No suitable columns found for chart.")
         return
     # Time-series charts must be sorted by X (date/period), not by Y value
@@ -507,11 +513,12 @@ def fmt_value(val, col_name: str):
         v = float(val)
     except (TypeError, ValueError):
         return val
+    import math
+    if math.isnan(v) or math.isinf(v):
+        return "—"
     if is_pct:
-        # Raw decimal columns (0–1 range, e.g. Discount=0.2 means 20%) → multiply by 100
         if -1.0 <= v <= 1.0:
             return f"{v * 100:.1f}%"
-        # Already in percentage form (e.g. avg_discount_pct=24.0)
         return f"{v:.1f}%"
     if is_currency:
         return f"${v:,.0f}"
@@ -539,6 +546,9 @@ def highlight_and_format(df: pd.DataFrame):
             return [""] * len(col)
         styles = [""] * len(col)
         try:
+            non_null = col.dropna()
+            if len(non_null) < 2 or non_null.nunique() < 2:
+                return styles  # skip all-null or all-same-value columns
             max_i = col.idxmax()
             min_i = col.idxmin()
             styles[max_i] = "background-color: #d4edda; font-weight: bold"
@@ -1044,11 +1054,25 @@ with st.form(f"request_form_{st.session_state.main_form_counter}"):
 
 if submitted and request_input:
     if uploaded_file is not None:
-        df_input = (
-            pd.read_csv(uploaded_file, encoding="latin-1")
-            if uploaded_file.name.endswith(".csv")
-            else pd.read_excel(uploaded_file)
-        )
+        if uploaded_file.name.endswith(".csv"):
+            raw_bytes = uploaded_file.read()
+            df_input = None
+            for enc in ["utf-8-sig", "utf-8", "latin-1", "cp1252"]:
+                try:
+                    import io as _io
+                    df_input = pd.read_csv(_io.BytesIO(raw_bytes), encoding=enc)
+                    break
+                except Exception:
+                    continue
+            if df_input is None:
+                st.error("Could not read the CSV file. Please ensure it is a valid UTF-8 or Latin-1 encoded file.")
+                st.stop()
+        else:
+            try:
+                df_input = pd.read_excel(uploaded_file)
+            except Exception as _xe:
+                st.error(f"Could not read Excel file: {_xe}")
+                st.stop()
     else:
         df_input = df_global
 
@@ -1194,7 +1218,7 @@ def render_single_result(result, request, request_type, df_input, name="", idx=0
             already_has_rank = any(c.lower() in ("rank", "rnk") for c in df_display.columns)
             grouped_rendered = render_grouped_table(df_display)
             if not grouped_rendered:
-                if is_ranked and len(df_formatted) <= 50 and not already_has_rank:
+                if is_ranked and len(df_formatted) <= 50 and not already_has_rank and "Rank" not in df_formatted.columns:
                     df_formatted.insert(0, "Rank", range(1, len(df_formatted) + 1))
                 st.dataframe(df_formatted, use_container_width=True, hide_index=True)
 

@@ -34,4 +34,10 @@ Rules:
         messages=[{"role": "user", "content": prompt}],
         temperature=0
     )
-    return response.choices[0].message.content.strip()
+    raw = response.choices[0].message.content.strip().upper()
+    # Validate against known categories — default to DATA_PULL if unknown
+    valid = {"DATA_PULL", "WHY_QUESTION", "FILE_ANALYSIS"}
+    for category in valid:
+        if category in raw:
+            return category
+    return "DATA_PULL"

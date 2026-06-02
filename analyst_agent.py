@@ -160,28 +160,40 @@ def _precompute_analysis_facts(df: pd.DataFrame, positive: bool) -> str:
     text_cols    = df.select_dtypes(include="object").columns.tolist()
     dim = text_cols[0] if text_cols else None
 
+    if len(df) == 0:
+        return "No data returned by the query."
+
     for num_col in numeric_cols:
-        col_total = df[num_col].sum()
-        col_avg   = df[num_col].mean()
+        col_series = df[num_col].dropna()
+        if len(col_series) == 0:
+            lines.append(f"\n[{num_col}]: all values are null — skipped")
+            continue
+        col_total = col_series.sum()
+        col_avg   = col_series.mean()
+        col_max   = col_series.max()
+        col_min   = col_series.min()
         lines.append(f"\n[{num_col}]")
         lines.append(f"  Total : {col_total:,.2f}")
         lines.append(f"  Avg   : {col_avg:,.2f}")
-        lines.append(f"  Max   : {df[num_col].max():,.2f}")
-        lines.append(f"  Min   : {df[num_col].min():,.2f}")
+        lines.append(f"  Max   : {col_max:,.2f}")
+        lines.append(f"  Min   : {col_min:,.2f}")
 
         if dim:
             try:
-                ranked = df.set_index(dim)[num_col].sort_values(ascending=not positive)
+                dim_series = df[dim].dropna()
+                if len(dim_series) == 0:
+                    continue
+                ranked = df.groupby(dim)[num_col].sum().sort_values(ascending=not positive)
                 lines.append(f"  Ranked by {dim} ({'DESC' if positive else 'ASC'}):")
                 for rank_i, (name, val) in enumerate(ranked.items(), 1):
-                    pct = (val / col_total * 100) if col_total else 0
+                    pct = (val / col_total * 100) if col_total != 0 else 0
                     lines.append(f"    #{rank_i}: {name} = {val:,.2f}  ({pct:.1f}% of total)")
             except Exception:
                 pass
 
-    # Row-level data (small datasets)
-    lines.append("\nFull data table:")
-    lines.append(df.to_string(index=False))
+    # Row-level data — cap at 50 rows to avoid token overflow
+    lines.append("\nFull data table (up to 50 rows):")
+    lines.append(df.head(50).to_string(index=False))
     return "\n".join(lines)
 
 
@@ -275,17 +287,29 @@ Rules:
     )
     raw = response.choices[0].message.content.strip()
     try:
-        if "```" in raw:
-            raw = raw.split("```")[1].replace("json", "").strip()
-        result = json.loads(raw)
+        # Strip markdown code fences in any format: ```json, ```JSON, ``` etc.
+        clean = re.sub(r"^```[a-zA-Z]*\s*", "", raw, flags=re.MULTILINE)
+        clean = re.sub(r"```\s*$", "", clean, flags=re.MULTILINE).strip()
+        # Find the first { ... } JSON object in the response
+        json_match = re.search(r'\{.*\}', clean, re.DOTALL)
+        if json_match:
+            clean = json_match.group(0)
+        result = json.loads(clean)
+        # Ensure required keys exist with safe defaults
+        result.setdefault("summary", "Analysis complete.")
+        result.setdefault("section_title", "Analysis")
+        result.setdefault("key_findings", [])
+        result.setdefault("recommendations", [])
+        result.setdefault("benchmark", "")
         # Normalise key: both "root_causes" and "key_drivers" → stored as "root_causes"
         if "key_drivers" in result and "root_causes" not in result:
             result["root_causes"] = result.pop("key_drivers")
-        result["_positive"] = positive  # carry the flag through to the UI
+        result.setdefault("root_causes", [])
+        result["_positive"] = positive
         return result
     except Exception:
         return {
-            "summary": raw,
+            "summary": raw[:500] if raw else "Could not parse analysis.",
             "section_title": "Analysis",
             "key_findings": [],
             "root_causes": [],

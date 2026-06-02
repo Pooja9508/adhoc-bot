@@ -10,7 +10,12 @@ load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
 
 DATA_PATH = "data/sales_data.csv"
-df_global = pd.read_csv(DATA_PATH, encoding='latin-1')
+try:
+    df_global = pd.read_csv(DATA_PATH, encoding='latin-1')
+except FileNotFoundError:
+    df_global = pd.DataFrame()  # empty fallback — uploaded datasets still work
+except Exception:
+    df_global = pd.DataFrame()
 
 STATE_ABBR = {
     "AL": "Alabama", "AK": "Alaska", "AZ": "Arizona", "AR": "Arkansas",
@@ -68,9 +73,15 @@ def _build_time_rules(df: pd.DataFrame) -> str:
     time_cols = []
     for c in df.columns:
         if any(kw in c.lower() for kw in ["time", "hour"]) and df[c].dtype == object:
-            sample = df[c].dropna().iloc[0] if len(df[c].dropna()) > 0 else None
-            if sample is not None and isinstance(sample, datetime.time):
-                time_cols.append(c)
+            try:
+                non_null = df[c].dropna()
+                if len(non_null) == 0:
+                    continue
+                sample = non_null.iloc[0]
+                if isinstance(sample, datetime.time):
+                    time_cols.append(c)
+            except Exception:
+                continue
 
     if not time_cols:
         return ""
@@ -310,9 +321,17 @@ def handle_data_pull(user_request: str, df_input: pd.DataFrame = None, existing_
         sales_data = df
         result_df = duckdb.query(sql).df()
 
-        # Detect aggregate result (1 row, all numeric, no text columns)
+        # Handle 0-row results gracefully
+        if len(result_df) == 0:
+            return {
+                "status": "error",
+                "sql": sql,
+                "error": "⚠️ The query returned no results. Try adjusting your filters or broadening your question.",
+            }
+
+        # Detect aggregate result: exactly 1 row, only numeric cols, no text cols
         is_agg = (
-            len(result_df) <= 3
+            len(result_df) == 1
             and len(result_df.select_dtypes(include="number").columns) >= 1
             and len(result_df.select_dtypes(include="object").columns) == 0
         )
