@@ -795,18 +795,17 @@ def generate_data_summary(user_request: str, row_count: int, df: pd.DataFrame) -
 
     # ── Step 2: LLM only writes natural language explanation ──────────────────
     prompt = f"""
-You are a data analyst. Your ONLY job is to write a clear natural language explanation of pre-computed facts.
+You are a data analyst. Your ONLY job is to write a clear, well-formatted markdown explanation of pre-computed facts.
 
 YOUR ROLE:
 - Read the pre-computed facts below
-- Write 2-3 sentences explaining what they mean in plain English
+- Format the answer as structured markdown for easy reading
 - You are an interpreter, NOT a calculator
 
 ABSOLUTE RULES:
 - Use ONLY the numbers listed in "Pre-computed facts" — copy them exactly as shown
 - Do NOT generate, calculate, or estimate any number yourself
 - Do NOT add any metric, percentage, or value not present in the facts
-- Do NOT round, modify, or reformat numbers differently than shown
 - If a fact is missing, do not mention it
 
 Business question: "{user_request}"
@@ -814,7 +813,21 @@ Business question: "{user_request}"
 Pre-computed facts (these are the ONLY numbers you may use):
 {computed_facts}
 
-Write your explanation now (2-3 sentences, natural language, no bullet points, no headers):
+FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+
+**[Direct one-sentence answer with the key finding and its value]**
+
+| Dimension | Value | Share |
+|---|---|---|
+| [name from facts] | [value from facts] | [pct from facts]% |
+... (one row per group, use exact values from facts)
+
+💡 **Insight:** [One sentence observation about the pattern or gap — based only on the facts above]
+
+Rules for the table:
+- Only include columns that exist in the facts
+- If there is no dimension (single value result), skip the table and use bullet points instead
+- Never add a column or row not present in the facts
 """
     try:
         response = client.chat.completions.create(
@@ -1101,7 +1114,7 @@ def render_single_result(result, request, request_type, df_input, name="", idx=0
 
             with st.spinner("Summarizing..."):
                 summary = generate_data_summary(request, result["rows"], df_result)
-            st.markdown(f"**{summary}**")
+            st.markdown(summary)
             st.divider()
 
             if is_agg:
