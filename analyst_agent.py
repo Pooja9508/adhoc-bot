@@ -278,7 +278,8 @@ Rules:
 - {causes_label}: {causes_rule}
 - recommendations: {rec_rule}
 - benchmark: {bench_rule} — use exact numbers from data
-- ONLY valid JSON — no markdown, no backticks, no extra text
+- Return ONLY the raw JSON object — no markdown, no backticks, no bold (**), no extra text before or after
+- Start your response with {{ and end with }} — nothing else
 """
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -287,10 +288,13 @@ Rules:
     )
     raw = response.choices[0].message.content.strip()
     try:
-        # Strip markdown code fences in any format: ```json, ```JSON, ``` etc.
-        clean = re.sub(r"^```[a-zA-Z]*\s*", "", raw, flags=re.MULTILINE)
+        # Remove markdown bold wrappers e.g. **{...}** or **json{...}**
+        clean = re.sub(r'^\*+\s*', '', raw)
+        clean = re.sub(r'\s*\*+$', '', clean)
+        # Strip code fences: ```json, ```JSON, ``` etc.
+        clean = re.sub(r"^```[a-zA-Z]*\s*", "", clean, flags=re.MULTILINE)
         clean = re.sub(r"```\s*$", "", clean, flags=re.MULTILINE).strip()
-        # Find the first { ... } JSON object in the response
+        # Extract the first { ... } JSON object
         json_match = re.search(r'\{.*\}', clean, re.DOTALL)
         if json_match:
             clean = json_match.group(0)
@@ -301,17 +305,24 @@ Rules:
         result.setdefault("key_findings", [])
         result.setdefault("recommendations", [])
         result.setdefault("benchmark", "")
-        # Normalise key: both "root_causes" and "key_drivers" → stored as "root_causes"
         if "key_drivers" in result and "root_causes" not in result:
             result["root_causes"] = result.pop("key_drivers")
         result.setdefault("root_causes", [])
         result["_positive"] = positive
         return result
     except Exception:
+        # JSON completely failed — build a readable natural-language fallback
+        # from whatever the LLM returned, stripping any JSON artifacts
+        clean_text = re.sub(r'[{}"\\]', '', raw)
+        clean_text = re.sub(r'\b(summary|section_title|key_findings|root_causes|recommendations|benchmark|explanation|bullets|conclusion|title)\s*:', '', clean_text)
+        clean_text = re.sub(r'\s+', ' ', clean_text).strip()
+        # Split into sentences for bullets
+        sentences = [s.strip() for s in re.split(r'[.!?]+', clean_text) if len(s.strip()) > 20]
+        findings = [{"title": "Finding", "explanation": s + ".", "bullets": [], "conclusion": ""} for s in sentences[:3]]
         return {
-            "summary": raw[:500] if raw else "Could not parse analysis.",
-            "section_title": "Analysis",
-            "key_findings": [],
+            "summary": sentences[0] + "." if sentences else "Analysis could not be formatted.",
+            "section_title": "Analysis Summary",
+            "key_findings": findings,
             "root_causes": [],
             "recommendations": [],
             "benchmark": "",
