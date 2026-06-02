@@ -62,6 +62,36 @@ def normalize_request(user_request: str) -> str:
     return "".join(result)
 
 
+def _build_time_rules(df: pd.DataFrame) -> str:
+    """Return TIME RULES if dataset has a time-of-day column (e.g. transaction_time)."""
+    import datetime
+    time_cols = []
+    for c in df.columns:
+        if any(kw in c.lower() for kw in ["time", "hour"]) and df[c].dtype == object:
+            sample = df[c].dropna().iloc[0] if len(df[c].dropna()) > 0 else None
+            if sample is not None and isinstance(sample, datetime.time):
+                time_cols.append(c)
+
+    if not time_cols:
+        return ""
+
+    col = time_cols[0]
+    return f"""
+TIME-OF-DAY RULES — '{col}' contains time-of-day values (stored as TIME objects):
+- Extract hour : HOUR({col}) as hour_of_day
+- Group by hour: GROUP BY HOUR({col}) ORDER BY hour_of_day
+- Example (sales by hour):
+  SELECT HOUR({col}) as hour_of_day,
+         SUM(unit_price * transaction_qty) as total_revenue,
+         COUNT(*) as transaction_count
+  FROM sales_data
+  GROUP BY hour_of_day
+  ORDER BY total_revenue DESC
+- Do NOT use strptime() or strftime() on time columns — use HOUR(), MINUTE() directly
+- Format hours as integers (0–23); the UI will display them as AM/PM
+"""
+
+
 def _build_date_rules(df: pd.DataFrame) -> str:
     """Return the correct DATE RULES block based on actual column types in df."""
     # Find date-like columns
@@ -116,6 +146,7 @@ def generate_sql(user_request: str, df: pd.DataFrame) -> str:
     unique_states = sorted(df[state_col].dropna().unique().tolist()) if state_col else []
 
     date_rules = _build_date_rules(df)
+    time_rules = _build_time_rules(df)
 
     prompt = f"""
 You are a SQL expert. Write ONE single DuckDB SQL query to answer this request.
@@ -137,6 +168,7 @@ Rules:
 - Use double quotes around column names that have spaces
 
 {date_rules}
+{time_rules}
 
 QUERY TYPE — choose based on the request:
 1. AGGREGATE (total, sum, count, how many, average, max, min, units sold, revenue):
@@ -151,16 +183,26 @@ QUERY TYPE — choose based on the request:
    → Add ORDER BY relevant to request (dates DESC, sales DESC, etc.)
    → Example: SELECT * FROM sales_data WHERE ...
 
-COLUMN MAPPING RULES — when exact column name is not present:
-- "sales" / "revenue" → look for: Sales, Revenue, Amount, Price, selling_price, discounted_price, actual_price
-- "quantity" / "units" → look for: Quantity, Units, Qty, rating_count, units_sold
-- "profit" → look for: Profit, Margin, profit_margin
-- "discount" → look for: Discount, discount_percentage, discount_pct
-- If NO numeric sales column exists, use rating_count or review_count as a sales volume proxy
+COLUMN MAPPING RULES — map business terms to actual columns intelligently:
+Available columns: {columns}
+
+- "sales" / "revenue" / "income":
+  → If columns contain both a price col (unit_price, price, selling_price) AND a qty col (transaction_qty, quantity, units_sold):
+     use price_col * qty_col as total_revenue  e.g. SUM(unit_price * transaction_qty)
+  → Otherwise look for: Sales, Revenue, Amount, discounted_price, actual_price
+  → Last resort: use any numeric column that represents value
+
+- "quantity" / "units" / "transactions" / "orders" / "count":
+  → Look for: transaction_qty, Quantity, Units, Qty, units_sold
+  → For order count use COUNT(DISTINCT order_id or transaction_id)
+
+- "profit" → Profit, Margin, profit_margin
+- "discount" → Discount, discount_percentage, discount_pct
+- "hour" / "time of day" → HOUR(transaction_time) — see TIME-OF-DAY RULES above
+- "average transaction value" / "avg order value" → AVG(unit_price * transaction_qty)
+
 - If a price column is a STRING with currency symbols (₹, $, €, £) or commas, clean it first:
   CAST(REPLACE(REPLACE(REPLACE(column_name, '₹', ''), '$', ''), ',', '') AS DOUBLE) as clean_price
-  Then use clean_price in calculations
-- If both price AND rating_count exist, use price * rating_count as total revenue proxy
 
 FILTER RULES (apply to both types):
 - For string filters (State, City, Region, Segment, Category):

@@ -15,8 +15,8 @@ def _col_names(df: pd.DataFrame) -> list[str]:
 
 
 def _quoted_cols(sql: str) -> list[str]:
-    """Extract all double-quoted identifiers from SQL."""
-    return re.findall(r'"([^"]+)"', sql)
+    """Extract all double-quoted identifiers from SQL (non-empty only)."""
+    return [c for c in re.findall(r'"([^"]+)"', sql) if c.strip()]
 
 
 def _unquoted_cols(sql: str) -> list[str]:

@@ -755,6 +755,20 @@ def render_grouped_table(df: pd.DataFrame) -> bool:
     return True
 
 
+def _fmt_dimension_val(col: str, val) -> str:
+    """Format dimension values — e.g. hour integers → AM/PM labels."""
+    if col.lower() in ("hour_of_day", "hour", "sale_hour"):
+        try:
+            h = int(val)
+            if h == 0:   return "12 AM"
+            if h < 12:   return f"{h} AM"
+            if h == 12:  return "12 PM"
+            return f"{h - 12} PM"
+        except Exception:
+            pass
+    return str(val)
+
+
 def _best_dimension(df: pd.DataFrame) -> str | None:
     """Pick the most meaningful text column for grouping.
     Prefers columns with 2–50 unique values (granular but not row-level IDs)."""
@@ -792,13 +806,14 @@ def _precompute_facts(df: pd.DataFrame) -> str:
             try:
                 grouped = df.groupby(dim)[num_col].sum().sort_values(ascending=False)
                 if len(grouped) == 1:
-                    # Only one group — skip percentage (100% is meaningless)
-                    lines.append(f"  {dim}: {grouped.index[0]} = {grouped.iloc[0]:,.2f}")
+                    label = _fmt_dimension_val(dim, grouped.index[0])
+                    lines.append(f"  {dim}: {label} = {grouped.iloc[0]:,.2f}")
                 else:
                     lines.append(f"  Ranked by {dim}:")
                     for name, val in grouped.items():
                         pct = (val / col_total * 100) if col_total else 0
-                        lines.append(f"    {name}: {val:,.2f} ({pct:.1f}%)")
+                        label = _fmt_dimension_val(dim, name)
+                        lines.append(f"    {label}: {val:,.2f} ({pct:.1f}%)")
             except Exception:
                 pass
 
