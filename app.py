@@ -889,6 +889,8 @@ RULES (apply to all formats):
 - Never show Share = 100% (meaningless for single-group results — skip the table)
 - Never invent a value, percentage, or insight not in the facts
 - Max 10 rows in any table
+- Do NOT include a title or heading — the question is already shown above. Start directly with the answer.
+- Do NOT repeat the question text as a heading (e.g. never write "## Top 5 Customers by Sales")
 """
     try:
         response = client.chat.completions.create(
