@@ -242,6 +242,7 @@ def make_detail_sql(agg_sql: str) -> str:
 
 
 def export_to_excel(df: pd.DataFrame, filename: str) -> str:
+    os.makedirs("outputs", exist_ok=True)
     path = f"outputs/{filename}.xlsx"
     df.to_excel(path, index=False)
     return path
