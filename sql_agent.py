@@ -4,6 +4,7 @@ import duckdb
 import pandas as pd
 from groq import Groq
 from dotenv import load_dotenv
+from validator import validate_sql
 
 load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -252,6 +253,18 @@ def handle_data_pull(user_request: str, df_input: pd.DataFrame = None, existing_
     df = df_input if df_input is not None else df_global
     try:
         sql = existing_sql if existing_sql else generate_sql(user_request, df)
+
+        # ── Validate before execution ──────────────────────────────────────
+        validation = validate_sql(sql, df)
+        if not validation["valid"]:
+            return {
+                "status": "error",
+                "sql": sql,
+                "error": validation["error"],
+                "warnings": validation.get("warnings", []),
+            }
+        sql = validation["sql"]  # use auto-fixed SQL if applicable
+
         sales_data = df
         result_df = duckdb.query(sql).df()
 

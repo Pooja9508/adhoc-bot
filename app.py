@@ -10,6 +10,7 @@ import re
 from triage import classify_request
 from sql_agent import handle_data_pull, df_global
 from analyst_agent import handle_why_question
+from validator import validate_chart_dimensions
 
 
 def split_top_level_commas(s: str) -> list:
@@ -443,6 +444,10 @@ def _build_fig(df, chart_type, x, y, title):
 def render_chart(df: pd.DataFrame, user_request: str, title: str = "Chart"):
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
     text_cols = df.select_dtypes(include="object").columns.tolist()
+    chart_check = validate_chart_dimensions(df)
+    if not chart_check["valid"]:
+        st.caption(chart_check.get("warning", "Not enough data to render a chart."))
+        return
     if len(df) < 2 or not numeric_cols:
         st.caption("Not enough data to render a chart.")
         return
@@ -752,27 +757,50 @@ def render_grouped_table(df: pd.DataFrame) -> bool:
 
 def generate_data_summary(user_request: str, row_count: int, df: pd.DataFrame) -> str:
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    agg_hints = ""
-    if numeric_cols:
+    text_cols = df.select_dtypes(include="object").columns.tolist()
+
+    # Build actual data metrics from the result df
+    data_snapshot = df.to_string(index=False) if len(df) <= 20 else df.head(20).to_string(index=False)
+    actual_metrics = {}
+    for col in numeric_cols[:5]:
         try:
-            totals = {col: df[col].sum() for col in numeric_cols[:3]}
-            agg_hints = ", ".join(f"{col}: {v:,.0f}" for col, v in totals.items())
+            actual_metrics[col] = {
+                "total": df[col].sum(),
+                "max": df[col].max(),
+                "min": df[col].min(),
+                "avg": df[col].mean(),
+            }
         except Exception:
             pass
+    metrics_str = "\n".join(
+        f"  {col}: total={v['total']:,.2f}, max={v['max']:,.2f}, min={v['min']:,.2f}, avg={v['avg']:,.2f}"
+        for col, v in actual_metrics.items()
+    )
+
     prompt = f"""
-Write ONE clear sentence answering this data request.
+You are a data analyst. Answer the business question below using ONLY the data provided.
 
-Request: "{user_request}"
-Total records found: {row_count:,}
-Numeric totals: {agg_hints}
+STRICT RULES — violating any rule makes your response wrong:
+- Use ONLY the numbers from the actual data snapshot below — NEVER invent or estimate figures
+- If the data does not contain enough information to answer, say so clearly
+- Never fabricate insights, trends, or comparisons not present in the data
+- Return a direct, natural language answer — no bullet points, no headers, no markdown
+- Structure: [Direct answer with the key number] → [1-2 supporting metrics] → [1 brief insight if evident from data]
+- Max 3 sentences total
+- Use proper formatting for numbers: $1,234 for currency, 1,234 for counts, 12.3% for percentages
 
-Rules:
-- One sentence only, no markdown
-- Mention the filter/subject (state, region, category, etc.) from the request using its full name
-- Include the record count with the word "records" or "orders"
-- If totals are available and relevant, include one key total (e.g. total sales)
-- Max 25 words
-- Example: "California has 2,001 sales records/orders in the dataset."
+Business Question: "{user_request}"
+Total records: {row_count:,}
+Columns available: {list(df.columns)}
+
+Actual computed metrics (use these exact numbers):
+{metrics_str if metrics_str else "No numeric columns"}
+
+Actual data:
+{data_snapshot}
+
+Example of good response style:
+"The highest revenue comes from Hell's Kitchen at $236,511, followed by Astoria at $221,318 and Lower Manhattan at $197,402. Hell's Kitchen accounts for 36% of total revenue across all 3 locations."
 """
     try:
         response = client.chat.completions.create(
@@ -1050,6 +1078,8 @@ def render_single_result(result, request, request_type, df_input, name="", idx=0
 
     elif request_type == "DATA_PULL":
         if result["status"] == "success":
+            for w in result.get("warnings", []):
+                st.warning(w)
             df_result = result["dataframe"]
             is_agg = result.get("is_aggregate", False)
             df_detail = result.get("detail_dataframe")

@@ -4,6 +4,7 @@ import duckdb
 import pandas as pd
 from groq import Groq
 from dotenv import load_dotenv
+from validator import validate_sql
 
 load_dotenv()
 client = Groq(api_key=os.getenv("GROQ_API_KEY"))
@@ -177,9 +178,17 @@ def interpret_results(user_request: str, df: pd.DataFrame, kpi: str = "", positi
     prompt = f"""
 You are a Senior Data Analyst writing a concise executive briefing. One glance = full picture.
 
+STRICT DATA INTEGRITY RULES — these override everything else:
+- Use ONLY the numbers from the data table below — NEVER invent, estimate, or assume figures
+- Every number in your response MUST appear in the data provided
+- If a metric is not in the data, do not mention it — say "data not available" instead
+- Never fabricate trends, comparisons, or insights not directly supported by the data
+- All bullet values must be exact numbers from the data (copy them exactly as shown)
+- If the data has fewer than 3 meaningful findings, return fewer — never pad with invented content
+
 Question: "{user_request}"
 Columns: {columns}
-Data:
+Actual Data (use ONLY these values):
 {data_summary}
 
 Return ONLY this JSON (no markdown, no backticks):
@@ -189,36 +198,36 @@ Return ONLY this JSON (no markdown, no backticks):
   "key_findings": [
     {{
       "title": "2-4 word title e.g. {finding_titles[0]}",
-      "explanation": "One sentence explaining this finding with a specific number.",
-      "bullets": ["Label: value", "Label: value", "Label: value"],
-      "conclusion": "One sentence takeaway or impact."
+      "explanation": "One sentence using exact numbers from the data above.",
+      "bullets": ["Label: [exact value from data]", "Label: [exact value from data]", "Label: [exact value from data]"],
+      "conclusion": "One sentence business takeaway supported by the data."
     }},
     {{
       "title": "2-4 word title e.g. {finding_titles[1]}",
-      "explanation": "One sentence explaining this finding with a specific number.",
-      "bullets": ["Label: value", "Label: value", "Label: value"],
-      "conclusion": "One sentence takeaway or impact."
+      "explanation": "One sentence using exact numbers from the data above.",
+      "bullets": ["Label: [exact value from data]", "Label: [exact value from data]", "Label: [exact value from data]"],
+      "conclusion": "One sentence business takeaway supported by the data."
     }},
     {{
       "title": "2-4 word title e.g. {finding_titles[2]}",
-      "explanation": "One sentence explaining this finding with a specific number.",
-      "bullets": ["Label: value", "Label: value", "Label: value"],
-      "conclusion": "One sentence takeaway or impact."
+      "explanation": "One sentence using exact numbers from the data above.",
+      "bullets": ["Label: [exact value from data]", "Label: [exact value from data]", "Label: [exact value from data]"],
+      "conclusion": "One sentence business takeaway supported by the data."
     }}
   ],
-  "{causes_label}": ["Under 7 words", "Under 7 words", "Under 7 words"],
+  "{causes_label}": ["Under 7 words, data-backed", "Under 7 words, data-backed", "Under 7 words, data-backed"],
   "recommendations": ["Action verb + specific what", "Action verb + specific what", "Action verb + specific what"],
-  "benchmark": "{'Top' if positive else 'Best'} performer: [Name] — [key metric and value]."
+  "benchmark": "{'Top' if positive else 'Best'} performer: [Name from data] — [exact metric and value from data]."
 }}
 
 Rules:
 - summary: {summary_named}
 - key_findings: exactly 3 findings — focus on {'strengths and drivers of success' if positive else 'problems and weaknesses'}
-- bullets: exactly 3 per finding, format "Label: value" only
+- bullets: exactly 3 per finding, format "Label: value" — values must match the data exactly
 - {causes_label}: {causes_rule}
 - recommendations: {rec_rule}
-- benchmark: {bench_rule}
-- ONLY valid JSON
+- benchmark: {bench_rule} — use exact numbers from data
+- ONLY valid JSON — no markdown, no backticks, no extra text
 """
     response = client.chat.completions.create(
         model="llama-3.3-70b-versatile",
@@ -252,6 +261,18 @@ def handle_why_question(user_request: str, df_input: pd.DataFrame = None, kpi: s
     positive = is_positive_question(user_request)
     try:
         sql = existing_sql if existing_sql else generate_analysis_sql(user_request, df, positive=positive)
+
+        # ── Validate before execution ──────────────────────────────────────
+        validation = validate_sql(sql, df)
+        if not validation["valid"]:
+            return {
+                "status": "error",
+                "sql": sql,
+                "error": validation["error"],
+                "warnings": validation.get("warnings", []),
+            }
+        sql = validation["sql"]  # use auto-fixed SQL if applicable
+
         sales_data = df
         result_df = duckdb.query(sql).df()
         explanation = interpret_results(user_request, result_df, kpi, positive=positive)
