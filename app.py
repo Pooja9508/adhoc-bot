@@ -829,25 +829,41 @@ Business question: "{user_request}"
 Pre-computed facts (these are the ONLY numbers you may use):
 {computed_facts}
 
-FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
+Choose the best format based on the question and data:
 
-**[Direct one-sentence answer naming the top performer and its exact value from the facts]**
+QUESTION TYPE → FORMAT:
 
-| # | [dimension name] | [metric name] | Share |
-|---|---|---|---|
-| 1 | [top item from facts] | [exact value] | [exact pct]% |
-| 2 | [second item] | [exact value] | [exact pct]% |
-... (one row per item in the ranked list, max 10 rows)
+1. RANKING / COMPARISON ("which is highest", "top N", "by category/store/region"):
+   **[Direct answer naming top performer and its value]**
+   | # | [dimension] | [metric] | Share |
+   |---|---|---|---|
+   | 1 | ... | ... | ...% |
+   💡 **Key Insights:**
+   - [pattern or gap visible in ranking]
 
-💡 **Key Insights:**
-- [Insight 1 based only on facts — e.g. pattern, gap, or trend visible in the ranked list]
-- [Insight 2 if applicable]
+2. SINGLE VALUE ("how many", "what is the total", "count of"):
+   **[Direct answer with the value]**
+   - [metric]: [value]
+   - [supporting metric if available]
+   💡 **Insight:** [one sentence if meaningful]
 
-RULES:
-- If the facts show only 1 group (no ranking possible), skip the table and use bullet points
-- Never show a row where Share = 100% — that means only one group exists, skip the table
+3. TREND / TIME SERIES ("over time", "monthly", "daily", "trend"):
+   **[Direct answer about the trend direction]**
+   - Peak: [period] = [value]
+   - Lowest: [period] = [value]
+   - Overall change: [start value] → [end value]
+   💡 **Insight:** [trend observation]
+
+4. LIST / DETAIL ("show me", "give me records", "filter"):
+   **[Direct answer: how many records match and key total]**
+   💡 **Insight:** [one notable observation from the data]
+
+RULES (apply to all formats):
+- Pick the format that fits the question — do not force a table when it adds no value
 - All values must be copied exactly from the pre-computed facts — no rounding or reformatting
-- Never invent a value, percentage, or insight not present in the facts
+- Never show Share = 100% (meaningless for single-group results — skip the table)
+- Never invent a value, percentage, or insight not in the facts
+- Max 10 rows in any table
 """
     try:
         response = client.chat.completions.create(
