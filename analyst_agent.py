@@ -152,9 +152,43 @@ Question: {user_request}
     return sql.split(";")[0].strip()
 
 
+def _precompute_analysis_facts(df: pd.DataFrame, positive: bool) -> str:
+    """Pre-compute all KPIs and rankings from the DataFrame in Python.
+    The LLM receives only these facts — it never calculates anything itself."""
+    lines = []
+    numeric_cols = df.select_dtypes(include="number").columns.tolist()
+    text_cols    = df.select_dtypes(include="object").columns.tolist()
+    dim = text_cols[0] if text_cols else None
+
+    for num_col in numeric_cols:
+        col_total = df[num_col].sum()
+        col_avg   = df[num_col].mean()
+        lines.append(f"\n[{num_col}]")
+        lines.append(f"  Total : {col_total:,.2f}")
+        lines.append(f"  Avg   : {col_avg:,.2f}")
+        lines.append(f"  Max   : {df[num_col].max():,.2f}")
+        lines.append(f"  Min   : {df[num_col].min():,.2f}")
+
+        if dim:
+            try:
+                ranked = df.set_index(dim)[num_col].sort_values(ascending=not positive)
+                lines.append(f"  Ranked by {dim} ({'DESC' if positive else 'ASC'}):")
+                for rank_i, (name, val) in enumerate(ranked.items(), 1):
+                    pct = (val / col_total * 100) if col_total else 0
+                    lines.append(f"    #{rank_i}: {name} = {val:,.2f}  ({pct:.1f}% of total)")
+            except Exception:
+                pass
+
+    # Row-level data (small datasets)
+    lines.append("\nFull data table:")
+    lines.append(df.to_string(index=False))
+    return "\n".join(lines)
+
+
 def interpret_results(user_request: str, df: pd.DataFrame, kpi: str = "", positive: bool = False) -> dict:
-    data_summary = df.to_string(index=False)
     columns = df.columns.tolist()
+    # ── Pre-compute ALL facts in Python — LLM never calculates ────────────────
+    computed_facts = _precompute_analysis_facts(df, positive)
 
     if positive:
         summary_rule   = "State the top performer and its key strength with one real number. Max 15 words."
@@ -176,20 +210,25 @@ def interpret_results(user_request: str, df: pd.DataFrame, kpi: str = "", positi
         summary_named  = "must name the worst performer and include one real number from the data"
 
     prompt = f"""
-You are a Senior Data Analyst writing a concise executive briefing. One glance = full picture.
+You are a Senior Data Analyst writing a concise executive briefing.
 
-STRICT DATA INTEGRITY RULES — these override everything else:
-- Use ONLY the numbers from the data table below — NEVER invent, estimate, or assume figures
-- Every number in your response MUST appear in the data provided
-- If a metric is not in the data, do not mention it — say "data not available" instead
-- Never fabricate trends, comparisons, or insights not directly supported by the data
-- All bullet values must be exact numbers from the data (copy them exactly as shown)
-- If the data has fewer than 3 meaningful findings, return fewer — never pad with invented content
+YOUR ROLE:
+- Read the pre-computed facts below
+- Interpret and explain them in structured JSON
+- You are an INTERPRETER, NOT a calculator
+
+ABSOLUTE RULES — violating any rule makes the response invalid:
+- Use ONLY the numbers from "Pre-computed facts" — copy them exactly as shown
+- Do NOT generate, calculate, estimate, or round any number yourself
+- Do NOT add metrics, percentages, or values not present in the facts
+- If a fact is unavailable, write "data not available" — never invent a substitute
+- Every bullet "Label: value" must use an exact value from the pre-computed facts
 
 Question: "{user_request}"
-Columns: {columns}
-Actual Data (use ONLY these values):
-{data_summary}
+Columns available: {columns}
+
+Pre-computed facts (these are the ONLY numbers you may use):
+{computed_facts}
 
 Return ONLY this JSON (no markdown, no backticks):
 {{

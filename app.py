@@ -755,52 +755,66 @@ def render_grouped_table(df: pd.DataFrame) -> bool:
     return True
 
 
-def generate_data_summary(user_request: str, row_count: int, df: pd.DataFrame) -> str:
+def _precompute_facts(df: pd.DataFrame) -> str:
+    """Compute all facts from the DataFrame in Python. LLM only explains these."""
+    lines = []
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    text_cols = df.select_dtypes(include="object").columns.tolist()
+    text_cols    = df.select_dtypes(include="object").columns.tolist()
 
-    # Build actual data metrics from the result df
-    data_snapshot = df.to_string(index=False) if len(df) <= 20 else df.head(20).to_string(index=False)
-    actual_metrics = {}
-    for col in numeric_cols[:5]:
-        try:
-            actual_metrics[col] = {
-                "total": df[col].sum(),
-                "max": df[col].max(),
-                "min": df[col].min(),
-                "avg": df[col].mean(),
-            }
-        except Exception:
-            pass
-    metrics_str = "\n".join(
-        f"  {col}: total={v['total']:,.2f}, max={v['max']:,.2f}, min={v['min']:,.2f}, avg={v['avg']:,.2f}"
-        for col, v in actual_metrics.items()
-    )
+    lines.append(f"Total rows: {len(df):,}")
 
+    for num_col in numeric_cols[:4]:
+        col_total = df[num_col].sum()
+        col_avg   = df[num_col].mean()
+        lines.append(f"{num_col} — total: {col_total:,.2f}, avg: {col_avg:,.2f}")
+
+        if text_cols:
+            dim = text_cols[0]
+            try:
+                grouped = df.groupby(dim)[num_col].sum().sort_values(ascending=False)
+                top     = grouped.index[0]
+                top_val = grouped.iloc[0]
+                pct     = (top_val / col_total * 100) if col_total else 0
+                lines.append(f"  Highest {num_col} by {dim}: {top} = {top_val:,.2f} ({pct:.1f}% of total)")
+                if len(grouped) > 1:
+                    bottom     = grouped.index[-1]
+                    bottom_val = grouped.iloc[-1]
+                    lines.append(f"  Lowest  {num_col} by {dim}: {bottom} = {bottom_val:,.2f}")
+                # All ranked values
+                ranked = [f"{k}: {v:,.2f}" for k, v in grouped.items()]
+                lines.append(f"  All {dim} values ranked: {' | '.join(ranked)}")
+            except Exception:
+                pass
+
+    return "\n".join(lines)
+
+
+def generate_data_summary(user_request: str, row_count: int, df: pd.DataFrame) -> str:
+    # ── Step 1: Compute ALL facts in Python — LLM never calculates ────────────
+    computed_facts = _precompute_facts(df)
+
+    # ── Step 2: LLM only writes natural language explanation ──────────────────
     prompt = f"""
-You are a data analyst. Answer the business question below using ONLY the data provided.
+You are a data analyst. Your ONLY job is to write a clear natural language explanation of pre-computed facts.
 
-STRICT RULES — violating any rule makes your response wrong:
-- Use ONLY the numbers from the actual data snapshot below — NEVER invent or estimate figures
-- If the data does not contain enough information to answer, say so clearly
-- Never fabricate insights, trends, or comparisons not present in the data
-- Return a direct, natural language answer — no bullet points, no headers, no markdown
-- Structure: [Direct answer with the key number] → [1-2 supporting metrics] → [1 brief insight if evident from data]
-- Max 3 sentences total
-- Use proper formatting for numbers: $1,234 for currency, 1,234 for counts, 12.3% for percentages
+YOUR ROLE:
+- Read the pre-computed facts below
+- Write 2-3 sentences explaining what they mean in plain English
+- You are an interpreter, NOT a calculator
 
-Business Question: "{user_request}"
-Total records: {row_count:,}
-Columns available: {list(df.columns)}
+ABSOLUTE RULES:
+- Use ONLY the numbers listed in "Pre-computed facts" — copy them exactly as shown
+- Do NOT generate, calculate, or estimate any number yourself
+- Do NOT add any metric, percentage, or value not present in the facts
+- Do NOT round, modify, or reformat numbers differently than shown
+- If a fact is missing, do not mention it
 
-Actual computed metrics (use these exact numbers):
-{metrics_str if metrics_str else "No numeric columns"}
+Business question: "{user_request}"
 
-Actual data:
-{data_snapshot}
+Pre-computed facts (these are the ONLY numbers you may use):
+{computed_facts}
 
-Example of good response style:
-"The highest revenue comes from Hell's Kitchen at $236,511, followed by Astoria at $221,318 and Lower Manhattan at $197,402. Hell's Kitchen accounts for 36% of total revenue across all 3 locations."
+Write your explanation now (2-3 sentences, natural language, no bullet points, no headers):
 """
     try:
         response = client.chat.completions.create(
@@ -813,7 +827,7 @@ Example of good response style:
         err_str = str(e)
         if "rate_limit_exceeded" in err_str or "429" in err_str or "Rate limit" in err_str:
             return f"Found {row_count:,} records matching your request."
-        return f"Found {row_count:,} records."
+        return computed_facts  # fallback: show raw computed facts
 
 
 def render_refine_bar(current_sql: str, df_input: pd.DataFrame):
