@@ -755,34 +755,50 @@ def render_grouped_table(df: pd.DataFrame) -> bool:
     return True
 
 
+def _best_dimension(df: pd.DataFrame) -> str | None:
+    """Pick the most meaningful text column for grouping.
+    Prefers columns with 2–50 unique values (granular but not row-level IDs)."""
+    text_cols = df.select_dtypes(include="object").columns.tolist()
+    if not text_cols:
+        return None
+    # Score: prefer columns whose unique count is between 2 and 50
+    # Among those, prefer higher unique count (more granular)
+    candidates = [(c, df[c].nunique()) for c in text_cols]
+    # Filter to meaningful range
+    meaningful = [(c, n) for c, n in candidates if 2 <= n <= 50]
+    if meaningful:
+        return max(meaningful, key=lambda x: x[1])[0]
+    # Fallback: column with most unique values that isn't every row unique
+    non_unique_id = [(c, n) for c, n in candidates if n < len(df)]
+    if non_unique_id:
+        return max(non_unique_id, key=lambda x: x[1])[0]
+    return text_cols[0]
+
+
 def _precompute_facts(df: pd.DataFrame) -> str:
     """Compute all facts from the DataFrame in Python. LLM only explains these."""
     lines = []
     numeric_cols = df.select_dtypes(include="number").columns.tolist()
-    text_cols    = df.select_dtypes(include="object").columns.tolist()
+    dim = _best_dimension(df)
 
     lines.append(f"Total rows: {len(df):,}")
 
     for num_col in numeric_cols[:4]:
         col_total = df[num_col].sum()
         col_avg   = df[num_col].mean()
-        lines.append(f"{num_col} — total: {col_total:,.2f}, avg: {col_avg:,.2f}")
+        lines.append(f"\n{num_col} — total: {col_total:,.2f}, avg per row: {col_avg:,.2f}")
 
-        if text_cols:
-            dim = text_cols[0]
+        if dim:
             try:
                 grouped = df.groupby(dim)[num_col].sum().sort_values(ascending=False)
-                top     = grouped.index[0]
-                top_val = grouped.iloc[0]
-                pct     = (top_val / col_total * 100) if col_total else 0
-                lines.append(f"  Highest {num_col} by {dim}: {top} = {top_val:,.2f} ({pct:.1f}% of total)")
-                if len(grouped) > 1:
-                    bottom     = grouped.index[-1]
-                    bottom_val = grouped.iloc[-1]
-                    lines.append(f"  Lowest  {num_col} by {dim}: {bottom} = {bottom_val:,.2f}")
-                # All ranked values
-                ranked = [f"{k}: {v:,.2f}" for k, v in grouped.items()]
-                lines.append(f"  All {dim} values ranked: {' | '.join(ranked)}")
+                if len(grouped) == 1:
+                    # Only one group — skip percentage (100% is meaningless)
+                    lines.append(f"  {dim}: {grouped.index[0]} = {grouped.iloc[0]:,.2f}")
+                else:
+                    lines.append(f"  Ranked by {dim}:")
+                    for name, val in grouped.items():
+                        pct = (val / col_total * 100) if col_total else 0
+                        lines.append(f"    {name}: {val:,.2f} ({pct:.1f}%)")
             except Exception:
                 pass
 
@@ -815,19 +831,23 @@ Pre-computed facts (these are the ONLY numbers you may use):
 
 FORMAT YOUR RESPONSE EXACTLY LIKE THIS:
 
-**[Direct one-sentence answer with the key finding and its value]**
+**[Direct one-sentence answer naming the top performer and its exact value from the facts]**
 
-| Dimension | Value | Share |
-|---|---|---|
-| [name from facts] | [value from facts] | [pct from facts]% |
-... (one row per group, use exact values from facts)
+| # | [dimension name] | [metric name] | Share |
+|---|---|---|---|
+| 1 | [top item from facts] | [exact value] | [exact pct]% |
+| 2 | [second item] | [exact value] | [exact pct]% |
+... (one row per item in the ranked list, max 10 rows)
 
-💡 **Insight:** [One sentence observation about the pattern or gap — based only on the facts above]
+💡 **Key Insights:**
+- [Insight 1 based only on facts — e.g. pattern, gap, or trend visible in the ranked list]
+- [Insight 2 if applicable]
 
-Rules for the table:
-- Only include columns that exist in the facts
-- If there is no dimension (single value result), skip the table and use bullet points instead
-- Never add a column or row not present in the facts
+RULES:
+- If the facts show only 1 group (no ranking possible), skip the table and use bullet points
+- Never show a row where Share = 100% — that means only one group exists, skip the table
+- All values must be copied exactly from the pre-computed facts — no rounding or reformatting
+- Never invent a value, percentage, or insight not present in the facts
 """
     try:
         response = client.chat.completions.create(
