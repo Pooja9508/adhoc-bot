@@ -188,6 +188,9 @@ QUERY TYPE — choose based on the request:
    → Example: SELECT store_location, SUM(unit_price * transaction_qty) as total_revenue FROM sales_data GROUP BY store_location ORDER BY total_revenue DESC
    → WRONG: SELECT store_location, SUM(...) FROM sales_data  ← missing GROUP BY store_location
    → If comparing across a dimension (region, category, store, segment), always GROUP BY that dimension
+   → WINNER QUERIES ("which X has the most/highest/best"): always include BOTH the dimension AND the metric
+     WRONG : SELECT "Segment" FROM sales_data GROUP BY "Segment" ORDER BY COUNT(*) DESC LIMIT 1
+     RIGHT : SELECT "Segment", COUNT(DISTINCT "Order ID") as order_count FROM sales_data GROUP BY "Segment" ORDER BY order_count DESC LIMIT 1
 
 2. DETAIL/LIST (show me, give me, list, find, orders from, records for):
    → Use SELECT * to return all columns

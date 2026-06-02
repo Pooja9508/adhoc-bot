@@ -1194,7 +1194,35 @@ def render_single_result(result, request, request_type, df_input, name="", idx=0
             st.markdown(summary)
             st.divider()
 
-            if is_agg:
+            # ── Single-row "winner" highlight (e.g. "which segment has most orders") ──
+            is_single_winner = (
+                len(df_result) == 1
+                and len(df_result.select_dtypes(include="object").columns) >= 1
+            )
+            if is_single_winner:
+                text_cols_res  = df_result.select_dtypes(include="object").columns.tolist()
+                num_cols_res   = df_result.select_dtypes(include="number").columns.tolist()
+                winner_label   = text_cols_res[0].replace("_", " ").title()
+                winner_value   = str(df_result[text_cols_res[0]].iloc[0])
+                st.markdown(
+                    f"""<div style="background:linear-gradient(135deg,#1a237e,#1565c0);
+                        border-radius:12px;padding:1.4rem 2rem;margin-bottom:1rem;color:white;">
+                        <div style="font-size:0.85rem;opacity:0.8;text-transform:uppercase;
+                            letter-spacing:1px;margin-bottom:0.3rem;">🏆 {winner_label}</div>
+                        <div style="font-size:2rem;font-weight:700;">{winner_value}</div>
+                    </div>""",
+                    unsafe_allow_html=True,
+                )
+                if num_cols_res:
+                    metric_cols = st.columns(len(num_cols_res))
+                    for i, col in enumerate(num_cols_res):
+                        val = df_result[col].iloc[0]
+                        label = col.replace("_", " ").title()
+                        formatted = f"{int(val):,}" if isinstance(val, float) and val == int(val) else f"{val:,.2f}" if isinstance(val, float) else f"{val:,}"
+                        metric_cols[i].metric(label, formatted)
+                st.divider()
+
+            elif is_agg:
                 numeric_cols = df_result.select_dtypes(include="number").columns.tolist()
                 metric_cols = st.columns(max(len(numeric_cols), 1))
                 for i, col in enumerate(numeric_cols):
