@@ -103,6 +103,9 @@ CRITICAL RULES — follow exactly:
 - Use double quotes around column names that have spaces
 - ALWAYS use GROUP BY and aggregate functions — NEVER return raw rows
 - NEVER select "Customer Name", "Product Name", "Order ID", or any row-level field
+- CRITICAL: Every non-aggregated column in SELECT must appear in GROUP BY
+  WRONG: SELECT store_location, SUM(...) FROM sales_data
+  RIGHT: SELECT store_location, SUM(...) FROM sales_data GROUP BY store_location
 
 {date_rules}
 

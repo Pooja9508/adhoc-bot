@@ -140,9 +140,10 @@ Rules:
 QUERY TYPE — choose based on the request:
 1. AGGREGATE (total, sum, count, how many, average, max, min, units sold, revenue):
    → Use aggregate functions: SUM(), COUNT(), AVG(), MAX(), MIN()
-   → SELECT SUM("Quantity") as total_units, or COUNT(*) as total_orders, etc.
-   → Add GROUP BY only if comparing across a dimension (e.g. by region)
-   → Example: SELECT SUM("Quantity") as total_units FROM sales_data WHERE ...
+   → CRITICAL: Every non-aggregated column in SELECT must appear in GROUP BY
+   → Example: SELECT store_location, SUM(unit_price * transaction_qty) as total_revenue FROM sales_data GROUP BY store_location ORDER BY total_revenue DESC
+   → WRONG: SELECT store_location, SUM(...) FROM sales_data  ← missing GROUP BY store_location
+   → If comparing across a dimension (region, category, store, segment), always GROUP BY that dimension
 
 2. DETAIL/LIST (show me, give me, list, find, orders from, records for):
    → Use SELECT * to return all columns
